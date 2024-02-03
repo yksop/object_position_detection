@@ -7,7 +7,7 @@ import tf2_geometry_msgs
 import tf2_ros
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Pose
-from pose_finder.srv import BrickPoseObtainer, BrickPoseObtainerResponse
+#from pose_finder.srv import BrickPoseObtainer, BrickPoseObtainerResponse
 from sensor_msgs.msg import Image, PointCloud2
 from mpl_toolkits.mplot3d import Axes3D
 from sklearn.decomposition import PCA
@@ -51,7 +51,7 @@ colors = {
 
 
 class Inputs:
-    ID: int
+    ID: str
     xc: float
     yc: float
     w: float
@@ -59,6 +59,7 @@ class Inputs:
 
 
 class Outputs:
+    ID: str
     xc: float
     yc: float
     zc: float
@@ -153,7 +154,22 @@ def discriminate_brick_points(image):
     return points_reversed
 
 
-def detection(image_msgs: Image, point_cloud2_msg: PointCloud2, input):
+def detection(image_msgs: Image, point_cloud2_msg: PointCloud2, input: [Inputs]):
+    output = []
+    o = Outputs()
+    o.xc = 0
+    o.yc = 0
+    o.zc = 0
+    o.roll = 0
+    o.pitch = 0
+    o.yawn = 0
+    o.ID = "aaa"
+    output.append(o)
+    output.append(o)
+    output.append(o)
+    output.append(o)
+    return output
+'''
     global bricks
     img = CvBridge().imgmsg_to_cv2(image_msgs, 'bgr8')
     for given_data in input:
@@ -208,6 +224,8 @@ def detection(image_msgs: Image, point_cloud2_msg: PointCloud2, input):
     position = find_orientation(points_in_world_frame)
 
     return centre, position
+'''
+
 
 
 def convert_coordinates(coordinates, from_frame, to_frame):
@@ -263,7 +281,7 @@ def find_orientation(points_3d):
 
     return roll_deg, pitch_deg, yaw_deg
 
-
+'''
 if __name__ == '__main__':
     rospy.init_node('vision_node')
 
@@ -279,3 +297,4 @@ if __name__ == '__main__':
 
     print("the vision is ready to deliver the block position")
     rospy.spin()
+'''
