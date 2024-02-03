@@ -9,7 +9,11 @@ from cv_bridge import CvBridge
 from geometry_msgs.msg import Pose
 from pose_finder.srv import BrickPoseObtainer, BrickPoseObtainerResponse
 from sensor_msgs.msg import Image, PointCloud2
-from sensor_msgs.msg import point_cloud2
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+
+input = []
 
 warnings.filterwarnings("ignore")
 
@@ -46,6 +50,23 @@ colors = {
 }
 
 
+class Inputs:
+    ID: int
+    xc: float
+    yc: float
+    w: float
+    h: float
+
+
+class Outputs:
+    xc: float
+    yc: float
+    zc: float
+    roll: float
+    pitch: float
+    yawn: float
+
+
 def get_info_of_bricks_in_world_frame(r):
     global bricks_information
 
@@ -75,13 +96,13 @@ def brick_value(names):
 
 
 def color_errors(color):
-    if colors == "red":
+    if color == "red":
         return 0.03
-    elif colors == "green":
+    elif color == "green":
         return 0.06
-    elif colors == "blue":
+    elif color == "blue":
         return 0.09
-    elif colors == "yellow":
+    elif color == "yellow":
         return 0.12
 
 
@@ -132,43 +153,42 @@ def discriminate_brick_points(image):
     return points_reversed
 
 
-def detection(image_msgs: Image, point_cloud2_msg: PointCloud2, model) -> None:
+def detection(image_msgs: Image, point_cloud2_msg: PointCloud2, input):
     global bricks
     img = CvBridge().imgmsg_to_cv2(image_msgs, 'bgr8')
-    result = model(img)
-    bounding_boxes = result.pandas().xyxy[0].to_dict(orient="records")
-    for bounding_box in bounding_boxes:
-        name = bounding_box['name']
-        s_side, l_side, height = get_info_of_bricks_in_world_frame(name)
-        confidence = bounding_box['confidence']
-        x1 = bounding_box['xmin']
-        y1 = bounding_box['ymin']
-        x2 = bounding_box['xmax']
-        y2 = bounding_box['ymax']
+    for given_data in input:
+        name = given_data['ID']
+        width_of_bb = given_data["w"]
+        heigth_of_bb = given_data["h"]
+        s_side, l_side, height = brick_value(name)
+        x1 = given_data["xc"] - width_of_bb / 2
+        y1 = given_data["yc"] - heigth_of_bb / 2
+        x2 = x1 + width_of_bb
+        y2 = y1 + heigth_of_bb
 
-        bricks = [(name, confidence, x1, y1, x2, y2, s_side, l_side, height)]
+        bricks.append((name, x1, y1, x2, y2, s_side, l_side, height))
 
     for attr in bricks:
-        sliceBox = slice(attr[3], attr[5]), slice(attr[2], attr[4])
-        image = img[sliceBox]
+        slc = slice(attr[2], attr[4]), slice(attr[1], attr[3])
+        image = img[slc]
 
         c = return_color_of_block(image)
         l_side = color_errors(c)
 
-        uv_points = discriminate_brick_points(img)
+        uv_points = discriminate_brick_points(image)
 
         points_from_zed = []
         for point in list(uv_points):
             points_from_zed.append([int(coordinate) for coordinate in point])
 
-        three_dimensional_points = point_cloud2.read_points(point_cloud2_msg, field_names=['x', 'y', 'z'],
-                                                            skip_nans=False, uvs=points_from_zed)
+        three_dimensional_points = PointCloud2.read_points(point_cloud2_msg, field_names=['x', 'y', 'z'],
+                                                           skip_nans=False, uvs=points_from_zed)
 
         camera_frame_points = []
         for point in three_dimensional_points:
             camera_frame_points.append(point[:3])
 
-        points_in_world_frame = []
+        points_in_world_frame = np.array()
         for point in camera_frame_points:
             pose = Pose()
             pose.position.x = point[0]
@@ -178,13 +198,16 @@ def detection(image_msgs: Image, point_cloud2_msg: PointCloud2, model) -> None:
             pose.orientation.x = 0
             pose.orientation.y = 0
             pose.orientation.z = 0
-            
+
             pose_in_world_frame = convert_coordinates(pose, 'zed2_left_camera_frame', 'world')
             transformed_point = [pose_in_world_frame.position.x, pose_in_world_frame.position.y,
-                                 pose_in_world_frame.position.z, pose_in_world_frame.orientation.w,
-                                 pose_in_world_frame.orientation.x, pose_in_world_frame.orientation.y,
-                                 pose_in_world_frame.orientation.z]
+                                 pose_in_world_frame.position.z]
             points_in_world_frame.append(transformed_point)
+
+    centre = find_centroid(points_in_world_frame)
+    position = find_orientation(points_in_world_frame)
+
+    return centre, position
 
 
 def convert_coordinates(coordinates, from_frame, to_frame):
@@ -203,47 +226,56 @@ def convert_coordinates(coordinates, from_frame, to_frame):
     except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
         raise
 
-# import numpy as np
-# from sensor_msgs.msg import PointCloud2, PointField
-# import ros_numpy
-# import rospy
 
-# fixed_z_value = 0.0
+def find_centroid(points_3d):
+    points_array = np.array(points_3d)
 
-# class Alberto_Inputs: # this is the data coming from the recognition module
-#     def __init__(self, ID: int, xc: float, yc: float, w: float, h: float):
-#         self.ID = ID
-#         self.xc = xc
-#         self.yc = yc
-#         self.w = w
-#         self.h = h
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(points_array[:, 0], points_array[:, 1], points_array[:, 2])
 
-# list_of_recognized_objects = [
-#     Alberto_Inputs(ID=1, xc=10.5, yc=20.3, w=30.0, h=40.0),
-#     Alberto_Inputs(ID=2, xc=15.2, yc=25.1, w=35.0, h=45.0),
-# ]
+    centroid = np.mean(points_array, axis=0)
 
-# xc_and_yc_tuples = [(obj.xc, obj.yc) for obj in list_of_recognized_objects]
+    ax.scatter(centroid[0], centroid[1], centroid[2], c='red', marker='X', s=100, label='Centroid')
+    ax.legend()
 
-# coordinates_array = np.array([(x, y, fixed_z_value) for x, y in xc_and_yc_tuples], dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4')])
+    plt.show()
 
-# point_cloud_msg = ros_numpy.msgify(PointCloud2, {
-#     'header': {'stamp': rospy.Time.now(), 'frame_id': 'base_link'},
-#     'height': 1,
-#     'width': len(xc_and_yc_tuples),
-#     'fields': [
-#         PointField(name='x', offset=0, datatype=7, count=1),
-#         PointField(name='y', offset=4, datatype=7, count=1),
-#         PointField(name='z', offset=8, datatype=7, count=1),
-#     ],
-#     'is_bigendian': False,
-#     'point_step': 12,  # 4 bytes per float * 3 coordinate
-#     'row_step': 12 * len(xc_and_yc_tuples),
-#     'data': coordinates_array.tobytes(),
-#     'is_dense': True,
-# })
+    return centroid[0], centroid[1], centroid[2]
 
-# uvs = ros_numpy.point_cloud2.read_points(point_cloud_msg, field_names=('x', 'y', 'z'), skip_nans=False)
 
-# for uvz in uvs:
-#     print(uvz)
+def find_orientation(points_3d):
+    points_array = np.array(points_3d)
+
+    pca = PCA(n_components=3)
+    pca.fit(points_array)
+
+    principal_axes = pca.components_
+    eigenvalues = pca.explained_variance_
+
+    roll = np.arctan2(principal_axes[1, 0], principal_axes[0, 0])
+    pitch = np.arctan2(-principal_axes[2, 0], np.sqrt(principal_axes[2, 1] ** 2 + principal_axes[2, 2] ** 2))
+    yaw = np.arctan2(principal_axes[2, 1], principal_axes[2, 2])
+
+    roll_deg = np.degrees(roll)
+    pitch_deg = np.degrees(pitch)
+    yaw_deg = np.degrees(yaw)
+
+    return roll_deg, pitch_deg, yaw_deg
+
+
+if __name__ == '__main__':
+    rospy.init_node('vision_node')
+
+    # Waiting image from zed node
+    image_msg = rospy.wait_for_message("/ur5/zed_node/left/image_rect_color", Image)
+
+    # Waiting point cloud from zed node
+    point_cloud2_msg = rospy.wait_for_message("/ur5/zed_node/point_cloud/cloud_registered", PointCloud2)
+
+    detection(image_msg, point_cloud2_msg, input)
+
+    s = rospy.Service('obtain_brick_pose', BrickPoseObtainer, get_info_of_bricks_in_world_frame)
+
+    print("the vision is ready to deliver the block position")
+    rospy.spin()
