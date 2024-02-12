@@ -1,4 +1,6 @@
 # Object's position and orientation detection
 
-This repo is part of the UniTN's project for the course of "Fondamenti di Robotica" held by prof. Luigi Palopoli.
-The scripts in this repo have the goal of identifying the centre and orientation of a mega block in gazebo in order for the UR5's end effector to be able to reach the object and grab it. 
+This is a sub module of UR5 lego project that allows to find the centre and the orientation of a given brick in teh scene.
+Doing this, we are able to move move towards and grasp it.
+
+[link]([url](https://github.com/AlphaNightLight/ur5_lego)https://github.com/AlphaNightLight/ur5_lego) to main repo
