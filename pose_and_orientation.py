@@ -398,8 +398,8 @@ def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, input) -> 
         out.yc = centroid[1]
         out.zc = centroid[2]
         out.roll = euler_angles[0]
-        out.roll = euler_angles[1]
-        out.roll = euler_angles[2]
+        out.pitch = euler_angles[1]
+        out.yaw = euler_angles[2]
 
         outputs.append(out)
 
