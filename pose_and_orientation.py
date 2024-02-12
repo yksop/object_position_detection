@@ -3,16 +3,16 @@
 """
     Write something...
 """
-
+import copy
 import math
 import warnings
 
 import cv2
 import numpy as np
 import rospy
+import open3d as o3d
 import tf2_ros
 from cv_bridge import CvBridge
-from mpl_toolkits.mplot3d import Axes3D
 from geometry_msgs.msg import Pose
 from matplotlib import pyplot as plt
 from sensor_msgs import point_cloud2
@@ -23,72 +23,9 @@ warnings.filterwarnings("ignore")
 
 bricks_information = []
 
-table_height = 0.88
-brick_error = 0.001
-value_error = 0.001
-
-minimum_distance = 0.005
-length_error = 0.005
-
 CROPPING_OFFSET = 10
 
-PI = 3.14
-
-brick_value = {
-    'X1-Y1-Z2': [0.03, 0.03, 0.02],
-    'X1-Y2-Z1': [0.03, 0.06, 0.01],
-    'X1-Y2-Z2-CHAMFER': [0.03, 0.06, 0.02],
-    'X1-Y2-Z2-TWINFILLET': [0.03, 0.06, 0.02],
-    'X1-Y2-Z2': [0.03, 0.06, 0.02],
-    'X1-Y3-Z2-FILLET': [0.01, 0.09, 0.02],
-    'X1-Y3-Z2': [0.03, 0.09, 0.02],
-    'X1-Y4-Z1': [0.03, 0.12, 0.01],
-    'X1-Y4-Z2': [0.03, 0.12, 0.02],
-}
-
-color_ranges = {
-    'red': [(0, 50, 50), (10, 255, 255)],  # Hue range: 0-10
-    'green': [(36, 50, 50), (70, 255, 255)],  # Hue range: 36-70
-    'blue': [(90, 50, 50), (130, 255, 255)],  # Hue range: 90-130
-    'yellow': [(20, 50, 50), (35, 255, 255)],  # Hue range: 20-35
-    'fuchsia': [(145, 50, 50), (175, 255, 255)],  # Hue range: 145-175
-    'orange': [(11, 50, 50), (25, 255, 255)]  # Hue range: 11-25
-}
-
-
-##
-#   This function computes the norm of two points.
-#
-#   Inputs:
-#   - p1: first point
-#   - p2: second point
-#
-#   Outputs:
-#   - math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2): distance between the points.
-##
-
-
-def norm(p1, p2):
-    return math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
-
-
-##
-#   This function returns three values of a brick: its short and long sides and its height.
-#
-#   Inputs:
-#   - name: the ID that is coming from YOLO recognition
-#
-#   Outputs:
-#   - value[0]: the short side of the brick
-#   - value[1]: the long side of the brick
-#   - value[2]: height of the brick
-##
-
-
-def get_brick_value(name):
-    value = np.array(brick_value[name])
-    return value[0], value[1], value[2]
-
+threshold = 0.01
 
 ##
 #   This function computes the largest contour of an image.
@@ -153,9 +90,6 @@ def draw_contour(image, contour):
 def discriminate_brick_points(image, offset):
     largest_contour = find_object(image)
     contoured_image = draw_contour(image, largest_contour)
-    cv2.imshow("Contoured image:", contoured_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
     filled_contour = np.zeros_like(contoured_image)
     cv2.drawContours(filled_contour, [largest_contour], -1, (255, 255, 255), thickness=cv2.FILLED)
 
@@ -174,7 +108,7 @@ def discriminate_brick_points(image, offset):
 #   The function finds the position of the object with respect to the world frame
 #
 #   Inputs:
-#   - image_msg: image published by the zed camera in Rviz
+#   - image_msg: image published by the zed camera in RViz
 #   - point_cloud2_msg: data published by the PointCloud2
 #   - recognized_bricks: information coming from the YOLO model
 #
@@ -185,80 +119,54 @@ def discriminate_brick_points(image, offset):
 
 
 def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, recognized_bricks) -> None:
-    # convert received image (bgr8 format) to a cv2 image
+    centroids = []
+    orientations = []
     img = CvBridge().imgmsg_to_cv2(image_msg, "bgr8")
 
-    cv2.imshow("Original image", img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-
-    brick_list = []
+    bricks = []
     for bbox in recognized_bricks:
         name = bbox['ID']
         width_of_bb = bbox["w"]
         heigth_of_bb = bbox["h"]
-        s_side, l_side, height = get_brick_value(name)
         x1 = bbox["xc"] - width_of_bb / 2
         y1 = bbox["yc"] - heigth_of_bb / 2
         x2 = x1 + width_of_bb
         y2 = y1 + heigth_of_bb
 
-        brick_list.append((name, int(x1), int(y1), int(x2), int(y2), s_side, l_side, height))
+        bricks.append((name, int(x1), int(y1), int(x2), int(y2)))
 
-    # iteration for each brick
-    for brick in brick_list:
+    for brick in bricks:
 
-        # cropping image box
-        sliceBox = slice(brick[2] - CROPPING_OFFSET, brick[4] + CROPPING_OFFSET), slice(brick[1] - CROPPING_OFFSET, brick[3] + CROPPING_OFFSET)
-        image = img[sliceBox]
+        slicing = slice(brick[2] - CROPPING_OFFSET, brick[4] + CROPPING_OFFSET), slice(brick[1] - CROPPING_OFFSET, brick[3] + CROPPING_OFFSET)
+        sliced_image = img[slicing]
 
-        cv2.imshow("Cropped image:", image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        uv_points = []
+        uv_points = discriminate_brick_points(sliced_image, brick)
 
-        # filtering background
-        points_2D = []
-        points_2D = discriminate_brick_points(image, brick)
+        uv_points_zed = []
+        for point in list(uv_points):
+            uv_points_zed.append([int(coordinate) for coordinate in point])
 
-        print("Points 2D:", points_2D)
-
-        points_2D_np = np.array(points_2D)
-        plt.scatter(points_2D_np[:, 0], points_2D_np[:, 1], c='r', marker='o')
-        plt.title('2D Points of the Brick')
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.show()
-
-        # from a list of tuples to a list of lists
-        zed_points = []
-        for point in list(points_2D):
-            zed_points.append([int(coordinate) for coordinate in point])
-
-        # transforming 2D points in 3D points (of the boundary box)
         points_3d = point_cloud2.read_points(point_cloud2_msg, field_names=['x', 'y', 'z'], skip_nans=False,
-                                             uvs=zed_points)
+                                             uvs=uv_points_zed)
 
-        # from zed frame to world frame
         rotational_matrix = np.array([[0., -0.49948, 0.86632],
                                       [-1., 0., 0.],
                                       [-0., -0.86632, -0.49948]])
 
-        # zed position from world frame
         pos_zed = np.array([-0.4, 0.59, 1.4])
 
-        # selection of informations from point cloud
-        zed_points = []
+        three_d_points_zed = []
         for point in points_3d:
-            zed_points.append(point[:3])
+            three_d_points_zed.append(point[:3])
 
-        # # trasforming each point in world frame
-        data_world = []
-        for point in zed_points:
+        three_d_points_world = []
+        for point in three_d_points_zed:
             point = rotational_matrix.dot(point) + pos_zed
             point = np.array(point)
-            data_world.append(point)
+            three_d_points_world.append(point)
 
-        # for point in zed_points:
+        # for point in uv_points_zed:
         #     pose = Pose()
         #     pose.position.x = point[0]
         #     pose.position.y = point[1]
@@ -271,98 +179,42 @@ def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, recognized
         #     pose_in_world_frame = convert_coordinates(pose, 'zed2_left_camera_frame', 'world')
         #     transformed_point = [pose_in_world_frame.position.x, pose_in_world_frame.position.y,
         #                          pose_in_world_frame.position.z]
-        #     data_world.append(transformed_point)
+        #     three_d_points_world.append(transformed_point)
 
-        min_y, min_x, max_y = get_three_points(data_world)
+        points_3d_np = np.array(three_d_points_world)
 
-        print("Three points:", min_y, min_x, max_y)
+        source_pointcloud = o3d.geometry.PointCloud()
+        source_pointcloud.points = o3d.utility.Vector3dVector(points_3d_np)
 
-        centroid = find_centroid(data_world)
-        alpha = find_orientation(min_y, min_x, max_y)
-        print("Orientation:", alpha)
-        # ros_preprocessing_data(brick[0], centroid, alpha)
+        stl_file_path = f"{brick[0]}.stl"
 
+        mesh = o3d.io.read_triangle_mesh(stl_file_path)
 
-def ros_preprocessing_data(name, x, y, z, alpha):
-    global bricks_information
-    bricks_information.append([name, x, y, z, alpha])
+        target_pointcloud = mesh.sample_points_uniformly(number_of_points=2000)
 
+        source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(source_pointcloud, target_pointcloud, voxel_size=0.05)
 
-##
-#   This function finds the leftmost point, the rightmost point and the lowest point at the bottom.
-#
-#   Inputs:
-#   - points: the 3D points that are part of the object
-#
-#   Outputs:
-#   - leftmost_point
-#   - rightmost_point
-#   - lowest_point
-##
+        result_fast = execute_fast_global_registration(source_down, target_down,
+                                                    source_fpfh, target_fpfh,
+                                                    voxel_size=0.05)
 
+        aligned_source_pointcloud, reg_p2p = icp_registration(source_pointcloud, target_pointcloud, threshold, result_fast.transformation)
 
-def get_three_points(points):
-    my_points = np.array(points)
-    min_x_index = np.argmin(my_points[:, 0])
+        # Extract transformation matrix
+        transformation_matrix = np.array(reg_p2p.transformation)
 
-    y_min = 100000
-    y_max = 0
+        # Extract rotation matrix
+        rotation_matrix = transformation_matrix[:3, :3]
 
-    for point in points:
-        actual_y = point[1]
-        if actual_y < y_min:
-            y_min = actual_y
-        if actual_y > y_max:
-            y_max = actual_y
+        # Convert rotation matrix to Euler angles
+        euler_angles = rotation_matrix_to_euler_angles(rotation_matrix)
 
-    # getting the set of points around min y and around max y
-    y_min_points = my_points[abs(my_points[:, 1] - y_min) <= value_error]
-    y_max_points = my_points[abs(my_points[:, 1] - y_max) <= value_error]
+        centroid = find_centroid(three_d_points_world)
 
-    # get the index of of the points with lowest x value
-    y_min_index = np.argmin(y_min_points[:, 0])
-    y_max_index = np.argmin(y_max_points[:, 0])
+        centroids.append(centroid)
+        orientations.append(euler_angles)
 
-    # get the actual three points value
-    lowest_point = my_points[min_x_index]
-    rightmost_point = y_min_points[y_min_index]
-    leftmost_point = y_max_points[y_max_index]
-
-    return rightmost_point, lowest_point, leftmost_point
-
-
-##
-#   This function finds the orientation of the brick.
-#
-#   Inputs:
-#   - rightmost_point
-#   - lowest_point
-#   - leftmost_point
-#
-#   Outputs:
-#   - rot: rotation of the brick with reference to the world frame
-##
-
-
-def find_orientation(rightmost_point, lowest_point, leftmost_point):
-    orientation = [0, 0, 0]
-
-    d1 = norm(rightmost_point, lowest_point)
-    d2 = norm(lowest_point, leftmost_point)
-
-    orientation[0] = PI / 2
-
-    if lowest_point[0] - rightmost_point[0] != 0:
-        alpha = math.atan((rightmost_point[1] - lowest_point[1]) / (rightmost_point[0] - lowest_point[0]))
-    else:
-        alpha = 0
-
-    if d1 > d2:
-        alpha = alpha + PI / 2
-
-    orientation[2] = alpha
-
-    return orientation
+    return centroids, orientations
 
 
 ##
@@ -379,20 +231,7 @@ def find_orientation(rightmost_point, lowest_point, leftmost_point):
 def find_centroid(points):
     points_array = np.array(points)
 
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(points_array[:, 0], points_array[:, 1], points_array[:, 2])
-
-    centroid = np.mean(points_array, axis=0)
-
-    ax.scatter(centroid[0], centroid[1], centroid[2], c='red', marker='X', s=100, label='Centroid')
-    ax.legend()
-
-    plt.show()
-
-    print("Centroid Coordinates (X, Y, Z) in World Frame:", centroid)
-
-    return centroid
+    return np.mean(points_array, axis=0)
 
 
 ##
@@ -427,23 +266,95 @@ def convert_coordinates(coordinates, from_frame, to_frame):
         raise
 
 
-if __name__ == '__main__':
-    rospy.init_node('vision_node')
+def icp_registration(source_pointcloud, target_pointcloud, threshold, starting_transformation):
+    criteria = o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100)
+    reg_p2p = o3d.pipelines.registration.registration_icp(
+        source_pointcloud, target_pointcloud, threshold, starting_transformation,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100)
+    )
 
-    # Waiting image from zed node
-    image_msg = rospy.wait_for_message("/ur5/zed_node/left_raw/image_raw_color", Image)
+    aligned_source_pointcloud = copy.deepcopy(source_pointcloud)
+    aligned_source_pointcloud.transform(reg_p2p.transformation)
 
-    # Waiting point cloud from zed node
-    point_cloud2_msg = rospy.wait_for_message("/ur5/zed_node/point_cloud/cloud_registered", PointCloud2)
+    return aligned_source_pointcloud, reg_p2p
 
-    input_data = [
-        {'ID': 'X1-Y1-Z2', 'xc': 954, 'yc': 465, 'w': 27, 'h': 44},
-        {'ID': 'X1-Y2-Z2-TWINFILLET', 'xc': 1145, 'yc': 463, 'w': 67, 'h': 51}
-    ]
 
-    object_detection(image_msg, point_cloud2_msg, input_data)
+##
+#   This function converts a rotation matrix into euler angles (RPY).
+#
+#   Inputs:
+#   - R: the rotation matrix
+#
+#   Outputs:
+#   - x: roll angle
+#   - y: pitch angle
+#   - z: yaw angle
+##
 
-    # s = rospy.Service('obtain_brick_pose', ObtainBrickPose, handle_obtain_bricks_informations)
 
-    print("the vision is ready to deliver the block position")
-    rospy.spin()
+def rotation_matrix_to_euler_angles(R):
+    # Convert a 3x3 rotation matrix to Roll, Pitch, Yaw angles
+    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+
+    singular = sy < 1e-6
+
+    if not singular:
+        x = math.atan2(R[2, 1], R[2, 2])
+        y = math.atan2(-R[2, 0], sy)
+        z = math.atan2(R[1, 0], R[0, 0])
+    else:
+        x = math.atan2(-R[1, 2], R[1, 1])
+        y = math.atan2(-R[2, 0], sy)
+        z = 0
+
+    return x, y, z
+
+
+##
+#   This function downsamples the point cloud, estimates normals, then computes a FPFH feature for each point.
+#   The FPFH feature is a 33-dimensional vector that describes the local geometric property of a point.
+#
+#   Inputs:
+#   - pcd: the pointcloud
+#   - voxel_size: the size at which we desire to downsample
+#
+#   Outputs:
+#   - pcd_down: the downsampled pointcloud
+#   - pcd_fpfh: FPFH feature for the point
+##
+
+
+def preprocess_point_cloud(pcd, voxel_size):
+    pcd_down = pcd.voxel_down_sample(voxel_size)
+
+    radius_normal = voxel_size * 2
+    pcd_down.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
+
+    radius_feature = voxel_size * 5
+    pcd_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        pcd_down,
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100))
+    return pcd_down, pcd_fpfh
+
+
+##
+#   This function simply
+##
+
+
+def prepare_dataset(source, target, voxel_size):
+    source_down, source_fpfh = preprocess_point_cloud(source, voxel_size)
+    target_down, target_fpfh = preprocess_point_cloud(target, voxel_size)
+    return source, target, source_down, target_down, source_fpfh, target_fpfh
+
+
+def execute_fast_global_registration(source_down, target_down, source_fpfh,
+                                     target_fpfh, voxel_size):
+    distance_threshold = voxel_size * 0.5
+    result = o3d.pipelines.registration.registration_fast_based_on_feature_matching(
+        source_down, target_down, source_fpfh, target_fpfh,
+        o3d.pipelines.registration.FastGlobalRegistrationOption(
+            maximum_correspondence_distance=distance_threshold))
+    return result
