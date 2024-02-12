@@ -27,6 +27,24 @@ CROPPING_OFFSET = 10
 
 threshold = 0.01
 
+class Input:
+    ID: str
+    xc: float
+    yc: float
+    w: float
+    h: float
+
+inputs = []
+
+class Outputs:
+    ID: str
+    xc: float
+    yc: float
+    zc: float
+    roll: float
+    pitch: float
+    yawn: float
+
 ##
 #   This function computes the largest contour of an image.
 #
@@ -116,105 +134,6 @@ def discriminate_brick_points(image, offset):
 #   - centre
 #   - orientation
 ##
-
-
-def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, recognized_bricks) -> None:
-    centroids = []
-    orientations = []
-    img = CvBridge().imgmsg_to_cv2(image_msg, "bgr8")
-
-    bricks = []
-    for bbox in recognized_bricks:
-        name = bbox['ID']
-        width_of_bb = bbox["w"]
-        heigth_of_bb = bbox["h"]
-        x1 = bbox["xc"] - width_of_bb / 2
-        y1 = bbox["yc"] - heigth_of_bb / 2
-        x2 = x1 + width_of_bb
-        y2 = y1 + heigth_of_bb
-
-        bricks.append((name, int(x1), int(y1), int(x2), int(y2)))
-
-    for brick in bricks:
-
-        slicing = slice(brick[2] - CROPPING_OFFSET, brick[4] + CROPPING_OFFSET), slice(brick[1] - CROPPING_OFFSET, brick[3] + CROPPING_OFFSET)
-        sliced_image = img[slicing]
-
-        uv_points = []
-        uv_points = discriminate_brick_points(sliced_image, brick)
-
-        uv_points_zed = []
-        for point in list(uv_points):
-            uv_points_zed.append([int(coordinate) for coordinate in point])
-
-        points_3d = point_cloud2.read_points(point_cloud2_msg, field_names=['x', 'y', 'z'], skip_nans=False,
-                                             uvs=uv_points_zed)
-
-        rotational_matrix = np.array([[0., -0.49948, 0.86632],
-                                      [-1., 0., 0.],
-                                      [-0., -0.86632, -0.49948]])
-
-        pos_zed = np.array([-0.4, 0.59, 1.4])
-
-        three_d_points_zed = []
-        for point in points_3d:
-            three_d_points_zed.append(point[:3])
-
-        three_d_points_world = []
-        for point in three_d_points_zed:
-            point = rotational_matrix.dot(point) + pos_zed
-            point = np.array(point)
-            three_d_points_world.append(point)
-
-        # for point in uv_points_zed:
-        #     pose = Pose()
-        #     pose.position.x = point[0]
-        #     pose.position.y = point[1]
-        #     pose.position.z = point[2]
-        #     pose.orientation.w = 1
-        #     pose.orientation.x = 0
-        #     pose.orientation.y = 0
-        #     pose.orientation.z = 0
-        #
-        #     pose_in_world_frame = convert_coordinates(pose, 'zed2_left_camera_frame', 'world')
-        #     transformed_point = [pose_in_world_frame.position.x, pose_in_world_frame.position.y,
-        #                          pose_in_world_frame.position.z]
-        #     three_d_points_world.append(transformed_point)
-
-        points_3d_np = np.array(three_d_points_world)
-
-        source_pointcloud = o3d.geometry.PointCloud()
-        source_pointcloud.points = o3d.utility.Vector3dVector(points_3d_np)
-
-        stl_file_path = f"Models/{brick[0]}/mesh/{brick[0]}.stl"
-
-        mesh = o3d.io.read_triangle_mesh(stl_file_path)
-
-        target_pointcloud = mesh.sample_points_uniformly(number_of_points=2000)
-
-        source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(source_pointcloud, target_pointcloud, voxel_size=0.05)
-
-        result_fast = execute_fast_global_registration(source_down, target_down,
-                                                    source_fpfh, target_fpfh,
-                                                    voxel_size=0.05)
-
-        aligned_source_pointcloud, reg_p2p = icp_registration(source_pointcloud, target_pointcloud, threshold, result_fast.transformation)
-
-        # Extract transformation matrix
-        transformation_matrix = np.array(reg_p2p.transformation)
-
-        # Extract rotation matrix
-        rotation_matrix = transformation_matrix[:3, :3]
-
-        # Convert rotation matrix to Euler angles
-        euler_angles = rotation_matrix_to_euler_angles(rotation_matrix)
-
-        centroid = find_centroid(three_d_points_world)
-
-        centroids.append(centroid)
-        orientations.append(euler_angles)
-
-    return centroids, orientations
 
 
 ##
@@ -365,7 +284,10 @@ def prepare_dataset(source, target, voxel_size):
     return source, target, source_down, target_down, source_fpfh, target_fpfh
 
 
-
+##
+#   This executes the actual global registration.
+#
+##
 
 
 def execute_fast_global_registration(source_down, target_down, source_fpfh,
@@ -376,3 +298,109 @@ def execute_fast_global_registration(source_down, target_down, source_fpfh,
         o3d.pipelines.registration.FastGlobalRegistrationOption(
             maximum_correspondence_distance=distance_threshold))
     return result
+
+
+def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, input) -> None:
+    outputs = []
+    img = CvBridge().imgmsg_to_cv2(image_msg, "bgr8")
+
+    bricks = []
+    for bbox in input:
+        name = bbox['ID']
+        width_of_bb = bbox["w"]
+        heigth_of_bb = bbox["h"]
+        x1 = bbox["xc"] - width_of_bb / 2
+        y1 = bbox["yc"] - heigth_of_bb / 2
+        x2 = x1 + width_of_bb
+        y2 = y1 + heigth_of_bb
+
+        bricks.append((name, int(x1), int(y1), int(x2), int(y2)))
+
+    for brick in bricks:
+
+        slicing = slice(brick[2] - CROPPING_OFFSET, brick[4] + CROPPING_OFFSET), slice(brick[1] - CROPPING_OFFSET, brick[3] + CROPPING_OFFSET)
+        sliced_image = img[slicing]
+
+        uv_points = []
+        uv_points = discriminate_brick_points(sliced_image, brick)
+
+        uv_points_zed = []
+        for point in list(uv_points):
+            uv_points_zed.append([int(coordinate) for coordinate in point])
+
+        points_3d = point_cloud2.read_points(point_cloud2_msg, field_names=['x', 'y', 'z'], skip_nans=False,
+                                             uvs=uv_points_zed)
+
+        rotational_matrix = np.array([[0., -0.49948, 0.86632],
+                                      [-1., 0., 0.],
+                                      [-0., -0.86632, -0.49948]])
+
+        pos_zed = np.array([-0.4, 0.59, 1.4])
+
+        three_d_points_zed = []
+        for point in points_3d:
+            three_d_points_zed.append(point[:3])
+
+        three_d_points_world = []
+        for point in three_d_points_zed:
+            point = rotational_matrix.dot(point) + pos_zed
+            point = np.array(point)
+            three_d_points_world.append(point)
+
+        # for point in uv_points_zed:
+        #     pose = Pose()
+        #     pose.position.x = point[0]
+        #     pose.position.y = point[1]
+        #     pose.position.z = point[2]
+        #     pose.orientation.w = 1
+        #     pose.orientation.x = 0
+        #     pose.orientation.y = 0
+        #     pose.orientation.z = 0
+        #
+        #     pose_in_world_frame = convert_coordinates(pose, 'zed2_left_camera_frame', 'world')
+        #     transformed_point = [pose_in_world_frame.position.x, pose_in_world_frame.position.y,
+        #                          pose_in_world_frame.position.z]
+        #     three_d_points_world.append(transformed_point)
+
+        points_3d_np = np.array(three_d_points_world)
+
+        source_pointcloud = o3d.geometry.PointCloud()
+        source_pointcloud.points = o3d.utility.Vector3dVector(points_3d_np)
+
+        stl_file_path = f"Models/{brick[0]}/mesh/{brick[0]}.stl"
+
+        mesh = o3d.io.read_triangle_mesh(stl_file_path)
+
+        target_pointcloud = mesh.sample_points_uniformly(number_of_points=2000)
+
+        source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(source_pointcloud, target_pointcloud, voxel_size=0.05)
+
+        result_fast = execute_fast_global_registration(source_down, target_down,
+                                                    source_fpfh, target_fpfh,
+                                                    voxel_size=0.05)
+
+        aligned_source_pointcloud, reg_p2p = icp_registration(source_pointcloud, target_pointcloud, threshold, result_fast.transformation)
+
+        # Extract transformation matrix
+        transformation_matrix = np.array(reg_p2p.transformation)
+
+        # Extract rotation matrix
+        rotation_matrix = transformation_matrix[:3, :3]
+
+        # Convert rotation matrix to Euler angles
+        euler_angles = rotation_matrix_to_euler_angles(rotation_matrix)
+
+        centroid = find_centroid(three_d_points_world)
+
+        out = Outputs()
+        out.ID = brick[0]
+        out.xc = centroid[0]
+        out.yc = centroid[1]
+        out.zc = centroid[2]
+        out.roll = euler_angles[0]
+        out.roll = euler_angles[1]
+        out.roll = euler_angles[2]
+
+        outputs.append(out)
+
+    return outputs
