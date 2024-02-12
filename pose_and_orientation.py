@@ -286,6 +286,17 @@ def prepare_dataset(source, target, voxel_size):
 
 ##
 #   This executes the actual global registration.
+#   It performs fast global registration based on feature matching with a specified maximum correspondence distance,
+#   and returns the result of the registration.
+#
+#   Inputs:
+#   - source: the source pointcloud
+#   - target: the target pointcloud
+#   - voxel_size: the size at which we desire to downsample
+#
+#   Outputs:
+#   -
+#   -
 #
 ##
 
@@ -300,17 +311,17 @@ def execute_fast_global_registration(source_down, target_down, source_fpfh,
     return result
 
 
-def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, inputs) -> None:
+def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, Input: inputs) -> None:
     outputs = []
     img = CvBridge().imgmsg_to_cv2(image_msg, "bgr8")
 
     bricks = []
     for bbox in inputs:
-        name = bbox['ID']
-        width_of_bb = bbox["w"]
-        heigth_of_bb = bbox["h"]
-        x1 = bbox["xc"] - width_of_bb / 2
-        y1 = bbox["yc"] - heigth_of_bb / 2
+        name = bbox.ID
+        width_of_bb = bbox.w
+        heigth_of_bb = bbox.h
+        x1 = bbox.xc - width_of_bb / 2
+        y1 = bbox.yc - heigth_of_bb / 2
         x2 = x1 + width_of_bb
         y2 = y1 + heigth_of_bb
 
