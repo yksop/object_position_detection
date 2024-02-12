@@ -311,7 +311,7 @@ def execute_fast_global_registration(source_down, target_down, source_fpfh,
     return result
 
 
-def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, Input: inputs) -> None:
+def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, inputs) -> None:
     outputs = []
     img = CvBridge().imgmsg_to_cv2(image_msg, "bgr8")
 
