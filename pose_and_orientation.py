@@ -36,7 +36,7 @@ class Input:
 
 inputs = []
 
-class Outputs:
+class Output:
     ID: str
     xc: float
     yc: float
@@ -300,12 +300,12 @@ def execute_fast_global_registration(source_down, target_down, source_fpfh,
     return result
 
 
-def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, input) -> None:
+def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, inputs) -> None:
     outputs = []
     img = CvBridge().imgmsg_to_cv2(image_msg, "bgr8")
 
     bricks = []
-    for bbox in input:
+    for bbox in inputs:
         name = bbox['ID']
         width_of_bb = bbox["w"]
         heigth_of_bb = bbox["h"]
@@ -392,7 +392,7 @@ def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, input) -> 
 
         centroid = find_centroid(three_d_points_world)
 
-        out = Outputs()
+        out = Output()
         out.ID = brick[0]
         out.xc = centroid[0]
         out.yc = centroid[1]
