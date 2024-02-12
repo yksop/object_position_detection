@@ -123,20 +123,6 @@ def discriminate_brick_points(image, offset):
 
 
 ##
-#   The function finds the position of the object with respect to the world frame
-#
-#   Inputs:
-#   - image_msg: image published by the zed camera in RViz
-#   - point_cloud2_msg: data published by the PointCloud2
-#   - recognized_bricks: information coming from the YOLO model
-#
-#   Outputs:
-#   - centre
-#   - orientation
-##
-
-
-##
 #   This function finds the centroid (centre of mass) of the brick.
 #
 #   Inputs:
@@ -183,20 +169,6 @@ def convert_coordinates(coordinates, from_frame, to_frame):
 
     except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
         raise
-
-
-def icp_registration(source_pointcloud, target_pointcloud, threshold, starting_transformation):
-    criteria = o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100)
-    reg_p2p = o3d.pipelines.registration.registration_icp(
-        source_pointcloud, target_pointcloud, threshold, starting_transformation,
-        o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100)
-    )
-
-    aligned_source_pointcloud = copy.deepcopy(source_pointcloud)
-    aligned_source_pointcloud.transform(reg_p2p.transformation)
-
-    return aligned_source_pointcloud, reg_p2p
 
 
 ##
@@ -288,6 +260,7 @@ def prepare_dataset(source, target, voxel_size):
 #   This executes the actual global registration.
 #   It performs fast global registration based on feature matching with a specified maximum correspondence distance,
 #   and returns the result of the registration.
+#   This registration is then used in the icp_registration to estimate a more accurate registration.
 #
 #   Inputs:
 #   - source: the source pointcloud
@@ -295,8 +268,7 @@ def prepare_dataset(source, target, voxel_size):
 #   - voxel_size: the size at which we desire to downsample
 #
 #   Outputs:
-#   -
-#   -
+#   - result: the final registration
 #
 ##
 
@@ -311,17 +283,61 @@ def execute_fast_global_registration(source_down, target_down, source_fpfh,
     return result
 
 
-def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, inputs) -> None:
+##
+#   This function finds a suitable final registration.
+#
+#   Inputs:
+#   - source_pointcloud
+#   - target_pointcloud
+#   - threshold: the maximum correspondence distance for a point pair to be considered an inlier during the process.
+#   - starting transformation: the initial transformation coming from the global registration
+#
+#   Outputs:
+#   -
+#   -
+#
+##
+
+
+def icp_registration(source_pointcloud, target_pointcloud, threshold, starting_transformation):
+    criteria = o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100)
+    reg_p2p = o3d.pipelines.registration.registration_icp(
+        source_pointcloud, target_pointcloud, threshold, starting_transformation,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100)
+    )
+
+    aligned_source_pointcloud = copy.deepcopy(source_pointcloud)
+    aligned_source_pointcloud.transform(reg_p2p.transformation)
+
+    return aligned_source_pointcloud, reg_p2p
+
+
+##
+#   The function finds the position of the object with respect to the world frame
+#
+#   Inputs:
+#   - image_msg: image published by the zed camera in RViz
+#   - point_cloud2_msg: data published by the PointCloud2
+#   - recognized_bricks: information coming from the YOLO model
+#
+#   Outputs:
+#   - centre
+#   - orientation
+##
+
+
+def object_detection(image_msg: Image, point_cloud2_msg: PointCloud2, Input: inputs) -> None:
     outputs = []
     img = CvBridge().imgmsg_to_cv2(image_msg, "bgr8")
 
     bricks = []
     for bbox in inputs:
-        name = bbox.ID
-        width_of_bb = bbox.w
-        heigth_of_bb = bbox.h
-        x1 = bbox.xc - width_of_bb / 2
-        y1 = bbox.yc - heigth_of_bb / 2
+        name = bbox["ID"]
+        width_of_bb = bbox["w"]
+        heigth_of_bb = bbox["h"]
+        x1 = bbox["xc"] - width_of_bb / 2
+        y1 = bbox["yc"] - heigth_of_bb / 2
         x2 = x1 + width_of_bb
         y2 = y1 + heigth_of_bb
 
