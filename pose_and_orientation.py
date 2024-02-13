@@ -1,7 +1,10 @@
 #! /usr/bin/env python3
 
 """
-    Write something...
+@file pose_and_orientation.py
+@brief A file to convert bounding boxes into poses and orientations.
+@date   15/01/2024
+@author Jacopo Veronese
 """
 import copy
 import math
